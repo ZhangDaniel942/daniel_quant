@@ -1,0 +1,26 @@
+[project]
+name = "daniel-quant"
+version = "0.1.0"
+description = "Personal quantitative investment research system"
+requires-python = ">=3.12"
+dependencies = [
+    "pandas",
+    "numpy",
+    "matplotlib",
+    "akshare",
+    "pyarrow",
+    "pymysql"
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "ruff",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
