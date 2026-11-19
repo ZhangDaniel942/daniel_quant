@@ -16,14 +16,19 @@ from pathlib import Path
 import pandas as pd
 
 from data.processed.processed_data_config import processed_data_path
+from quant.utils.print_utils import pf
 from src.quant.backtest.engine import run_backtest
 from src.quant.strategies.dual_ma import generate_signals
 
 # 获取数据路径
-data_path = processed_data_path / "sina_510300.csv"
+data_path = processed_data_path / "sina_601600.csv"
 
 # 加载行情数据
 df = pd.read_csv(data_path, parse_dates=["date"])
+pf("打印一下数据核对一下")
+print(df["date"].count())
+print(df[['open', 'high', 'low', 'close']].sum())
+pf("核对原始数据done")
 
 # 生成策略信号, 买入卖出信号
 df = generate_signals(df)

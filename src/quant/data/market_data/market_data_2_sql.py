@@ -75,7 +75,7 @@ def save_market_data(
 
 
 if __name__ == '__main__':
-    data_path = processed_data_path / "sina_510300.csv"
+    data_path = processed_data_path / "sina_601600.csv"
     df = pd.read_csv(data_path)
     print(df.head())
     save_market_data(df)

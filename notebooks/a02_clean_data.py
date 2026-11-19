@@ -27,8 +27,7 @@ def clean_data(file_name):
     processed_data.to_csv(to_data, index=False)
     print("数据保存成功")
 
-
-
 if __name__ == '__main__':
-    clean_data("sina_510300.csv")
-    print("数据清晰成功")
+    # clean_data("sina_510300.csv")
+    clean_data("sina_601600.csv")
+    print("数据清洗成功")

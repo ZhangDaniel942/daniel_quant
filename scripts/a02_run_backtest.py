@@ -24,7 +24,7 @@ from reports.report_data_config import report_data_path
 # 1. 路径配置
 # ============================================================
 # 输入
-DATA_PATH = processed_data_path / "sina_510300.csv"
+DATA_PATH = processed_data_path / "sina_601600.csv"
 # 输出
 REPORT_DIR = report_data_path
 
