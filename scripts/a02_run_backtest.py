@@ -15,6 +15,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 from data.processed.processed_data_config import processed_data_path
+from quant.backtest.trade_ledger import generate_trade_ledger
 from quant.strategies.dual_ma import generate_signals
 from quant.backtest.engine import run_backtest
 from quant.backtest.performance import calculate_performance
@@ -184,6 +185,18 @@ def main():
 
     # 执行回测
     result = execute_backtest(df)
+
+    # 生成交易账本
+    trade_ledger = generate_trade_ledger(result)
+    print("\n交易账本：")
+    print(trade_ledger)
+
+    # 保存交易账本
+    trade_ledger_path = report_data_path / "trade_ledger.csv"
+    trade_ledger.to_csv(
+        trade_ledger_path,
+        index=False,
+    )
 
     # 4. 查看资金变化
     print("\n===== 账户状态 =====")

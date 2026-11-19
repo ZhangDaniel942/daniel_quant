@@ -14,6 +14,7 @@ import pandas as pd
 import pytest
 
 from quant.backtest.engine import run_backtest
+from quant.utils.print_utils import pf
 
 
 # ============================================================
@@ -531,5 +532,92 @@ def test_all_sell_signals():
     ]
 
     assert (result["position"] == 0).all()
+
+
+
+
+# pf("新增测试内容")
+def create_test_data():
+    """构造4个交易日的测试行情"""
+    return pd.DataFrame(
+        {
+            "open": [10, 10, 12, 13],
+            "close": [10, 11, 12, 13],
+            "signal": [1, 1, 0, 0],
+        },
+        index=pd.to_datetime([
+            "2025-01-02",
+            "2025-01-03",
+            "2025-01-06",
+            "2025-01-07",
+        ]),
+    )
+
+
+def test_zero_cost():
+    """测试零手续费、零滑点"""
+
+    df = create_test_data()
+
+    result = run_backtest(
+        df,
+        initial_capital=1000,
+        commission_rate=0,
+        slippage_rate=0,
+    )
+
+    # 第一天不交易
+    assert result["action"].iloc[0] == "HOLD"
+
+    # 第二天买入
+    assert result["action"].iloc[1] == "BUY"
+
+    # 第三天继续持有
+    assert result["action"].iloc[2] == "HOLD"
+
+    # 第四天卖出
+    assert result["action"].iloc[3] == "SELL"
+
+    # 最终资产应为1300
+    assert abs(result["equity"].iloc[-1] - 1300) < 1e-8
+
+
+def test_continuous_buy_signal():
+    """连续买入信号只执行一次买入"""
+
+    df = create_test_data()
+
+    result = run_backtest(
+        df,
+        initial_capital=1000,
+        commission_rate=0,
+        slippage_rate=0,
+    )
+
+    buy_count = (result["action"] == "BUY").sum()
+
+    assert buy_count == 1
+
+
+def test_last_day_signal_not_executed():
+    """最后一天的信号不应该执行"""
+
+    df = create_test_data()
+
+    # 修改最后一天信号为买入
+    df["signal"] = [0, 0, 0, 1]
+
+    result = run_backtest(
+        df,
+        initial_capital=1000,
+        commission_rate=0,
+        slippage_rate=0,
+    )
+
+    # 最后一天没有下一交易日，因此不买入
+    assert result["action"].iloc[-1] == "HOLD"
+
+    # 最终仍然没有持仓
+    assert result["shares"].iloc[-1] == 0
 
 

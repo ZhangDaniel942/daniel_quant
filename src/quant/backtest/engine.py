@@ -65,7 +65,10 @@ def run_backtest(
 
     for i, (index, row) in enumerate(data.iterrows()):
         # print(index)
-        date = row["date"]
+        if "date" in data.columns:
+            date = row["date"]
+        else:
+            date = index
         # 第一天没有上一交易日信号，因此不交易
         if i == 0:
             target_position = 0
@@ -130,7 +133,9 @@ def run_backtest(
             "equity": equity,
         })
 
+
     result = pd.DataFrame(records).set_index("date")
+    # result["date"] = result.index
 
     result["nav"] = result["equity"] / initial_capital
     # 这里使用收盘价计算收益
