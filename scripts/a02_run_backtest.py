@@ -74,12 +74,15 @@ def generate_strategy(df):
 # ============================================================
 # 4. 执行回测
 # ============================================================
-def execute_backtest(df, initial_capital, commission_rate, slippage_rate):
+def execute_backtest(df, initial_capital, commission_rate, slippage_rate, max_position=1.0, max_position_change=0.1, lot_size=100,):
     result = run_backtest(
         df,
         initial_capital=initial_capital,
         commission_rate=commission_rate,
         slippage_rate=slippage_rate,
+        max_position=max_position,
+        max_position_change=max_position_change,
+        lot_size=lot_size,
     )
 
     print("\n回测执行完成")
@@ -150,17 +153,14 @@ def plot_result(result):
 # ============================================================
 # 7. 保存回测结果
 # ============================================================
-
 def save_result(result):
     output_path = REPORT_DIR / "510300_dual_ma.parquet"
     result.to_parquet(output_path)
     print(f"\n回测数据已保存：{output_path}")
 
-
 # ============================================================
 # 8. 主程序
 # ============================================================
-
 def main():
 
     initial_capital = 100_000
@@ -169,13 +169,19 @@ def main():
 
     # 1. 读取行情数据
     df = load_data("510300")
-    df = df.loc["2021"]
-    pf(f"读取行情数据df的索引: {df.index}")
 
     # 2. 运行双均线策略回测
     # 2.1, 生成信号
     df = generate_strategy(df)
     pf(f"运行双均线策略回测df的索引: {df.index}")
+
+    # 先生成信号, 再筛选日期,能保证筛选的日期里有尽可能多的信号
+    df = df.loc["2021"]
+    pf(f"读取行情数据df的索引: {df.index}")
+
+
+
+
 
     # groupby是df的, 不是series的方法哈
     # print(df.groupby(["signal"])['signal'].count())
@@ -188,8 +194,50 @@ def main():
     # 内部会计算nav和return哈
     # 注意哈: 这里的返回结果result不是在原先的df上增加字段, 而是一个新的.
     # 因为后续可能会在df上同时跑多个策略, 尽量保证结果数据独立化
-    result = execute_backtest(df, initial_capital, commission_rate, slippage_rate)
+    max_position_change = 0.1
+    result = execute_backtest(df, initial_capital, commission_rate, slippage_rate,
+                              max_position=1.0,
+                              max_position_change=max_position_change,
+                              lot_size=100,
+                              )
     pf(f"执行回测: {df.index}")
+    print(
+        result[
+            [
+                "signal",
+                "current_position",
+                "target_position",
+                "next_position",
+                "position",
+                "action",
+                "cash",
+                "shares",
+                "commission",
+                "equity",
+            ]
+        ].tail(30)
+    )
+    # 现金不能为负数
+    assert (result["cash"] >= -1e-8).all()
+
+    # 持仓不能为负数
+    assert (result["shares"] >= 0).all()
+
+    # 账户资产必须等于现金 + 持仓市值
+    assert (
+            (
+                    result["equity"]
+                    - result["cash"]
+                    - result["shares"] * result["close"]
+            ).abs() < 1e-6
+    ).all()
+
+    # 每日计划调整幅度不能超过 max_position_change
+    position_change = (
+            result["next_position"] - result["current_position"]
+    ).abs()
+
+    assert (position_change <= max_position_change + 1e-8).all()
 
     print(result.iloc[-1])
 
@@ -236,17 +284,17 @@ def main():
 
 
 
-    # 生成交易账本
-    trade_ledger = generate_trade_ledger(result)
-    print("\n交易账本：")
-    print(trade_ledger)
+    # # 生成交易账本
+    # trade_ledger = generate_trade_ledger(result)
+    # print("\n交易账本：")
+    # print(trade_ledger)
 
-    # 保存交易账本
-    trade_ledger_path = report_data_path / "trade_ledger.csv"
-    trade_ledger.to_csv(
-        trade_ledger_path,
-        index=False,
-    )
+    # # 保存交易账本
+    # trade_ledger_path = report_data_path / "trade_ledger.csv"
+    # trade_ledger.to_csv(
+    #     trade_ledger_path,
+    #     index=False,
+    # )
 
 
 

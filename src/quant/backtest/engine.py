@@ -9,26 +9,37 @@
 """
 Description: 回测引擎
     概念: equity = cash + shares * close
-    字段	        中文名称	    含义
-    date	    交易日期	    当前交易日
-    open	    开盘价	    当天开盘价格
-    close	    收盘价	    当天收盘价格
-    signal	    策略信号	    策略希望持有还是空仓
-    position	实际持仓	    当前是否持有ETF, 只有0和1, 0代表0%持有, 1代表100%持有, 我们目前不管理仓位, 只有全仓和空仓, 后续可以有小数, 代表仓位管理
-    action	    交易动作	    BUY / SELL / HOLD
-    cash	    现金	        当前可用现金
-    shares	    持仓份额	    当前持有多少份ETF
-    commission	手续费	    当天发生的交易手续费
-    equity	    总资产	    现金加持仓市值
+    字段	                中文名称	        含义
+    date	            交易日期	        当前交易日
+    open	            开盘价	        当天开盘价格
+    close	            收盘价	        当天收盘价格
+    signal	            策略信号	        策略希望持有还是空仓
+
+    current_position	开盘前持仓	    今天开盘时、交易执行前的实际仓位，按今天开盘价重新估值
+    target_position	    最终目标仓位	    根据上一交易日的策略信号，确定最终希望达到的仓位
+    next_position	    预计调整后持仓	根据每日最大调整幅度，计算今天计划调整到的仓位
+    position	        收盘后实际持仓	今天交易完成后，按收盘价重新估值的实际仓位
+
+    action	            交易动作	        BUY / SELL / HOLD
+    cash	            现金	            当前可用现金
+    shares	            持仓份额	        当前持有多少份ETF
+    commission	        手续费	        当天发生的交易手续费
+    equity	            总资产	        现金加持仓市值
 """
 
 import pandas as pd
+
+from quant.backtest.position_sizing import calculate_step_position, calculate_trade_value, calculate_buy_shares, calculate_sell_shares
+
 
 def run_backtest(
     df: pd.DataFrame,
     initial_capital: float = 100_000,
     commission_rate: float = 0.0003,
     slippage_rate: float = 0.0002,
+    max_position: float = 1.0,        # 最大满仓
+    max_position_change: float = 0.1, # 每次仓位调整不能大于总资产的10%
+    lot_size: int = 100,                   # 每手100份
 ) -> pd.DataFrame:
     """
     最小版日频回测引擎。
@@ -36,9 +47,10 @@ def run_backtest(
     1. 当日收盘生成 signal。
     2. 下一交易日开盘执行。
     3. 当日收盘计算账户资产。
-    4. 暂不模拟整手、税费、涨跌停和部分成交。
+    4. 模拟ETF整手交易、手续费和滑点。
+    5. 暂不模拟涨跌停、流动性限制和部分成交。
     """
-    required_columns = {"open", "close", "signal"}
+    required_columns = {"open", "close", "signal", "ma_short", "ma_long",}
 
     if not required_columns.issubset(df.columns):
         raise ValueError(f"缺少必要字段：{required_columns - set(df.columns)}")
@@ -50,6 +62,15 @@ def run_backtest(
         raise ValueError("手续费率不合法")
     if not 0 <= slippage_rate < 1:
         raise ValueError("滑点率不合法")
+
+    if not 0 < max_position <= 1:
+        raise ValueError("最大仓位必须在 0 到 1 之间")
+
+    if not 0 < max_position_change <= 1:
+        raise ValueError("每日最大仓位调整幅度必须在 0 到 1 之间")
+
+    if lot_size <= 0:
+        raise ValueError("交易单位必须大于 0")
 
     data = df.copy().sort_index()
     if data.index.has_duplicates:
@@ -75,45 +96,114 @@ def run_backtest(
 
         # 第一天没有上一交易日信号，因此不交易
         if i == 0:
-            target_position = 0
+            execution_signal = 0
         else:
-            target_position = int(data["signal"].iloc[i - 1]) # 前一天有信号, 比如1, 今天就全仓买入, 如果是0, 就清仓
+            # 使用前一个交易日的信号，避免未来函数
+            # signal = int(data["signal"].iloc[i - 1])
+            execution_signal = int(data["signal"].iloc[i - 1])
+
+        # 策略信号转换成最终目标仓位
+        # target_position 是最终目标仓位，不是今天实际要达到的仓位
+        # 例如：
+        # - 昨日 signal=1，最终目标仓位100%。
+        # - 昨日 signal=0，最终目标仓位0%。
+        # 但我们每天最多只调整10个百分点。
+        target_position = execution_signal * max_position
 
         open_price = float(row["open"])
         close_price = float(row["close"])
         ma_short = float(row["ma_short"])
         ma_long = float(row["ma_long"])
 
-        # 目标持仓与当前持仓不同，执行买卖
-        # current_position其实是交易前的仓位.
-        current_position = 1 if shares > 0 else 0  # shares就是当前份额, 因为我们只有空仓和全仓, 所以
-        if target_position != current_position:
-            if target_position == 1:
-                # 考虑买入滑点
-                execution_price = open_price * (1 + slippage_rate)
-                # 留出手续费，计算可购买份额
-                shares = cash / ( execution_price * (1 + commission_rate) )
-                trade_value = shares * execution_price
-                commission = trade_value * commission_rate
-                cash -= trade_value + commission
+        # ==========================================
+        # 1. 计算开盘时的账户状态
+        # ==========================================
+        equity_at_open = cash + shares * open_price
+        current_position = (
+            shares * open_price / equity_at_open
+            if equity_at_open > 0
+            else 0.0
+        )
+
+        # ==========================================
+        # 2. 计算今天允许调整到的仓位
+        # ==========================================
+        step_result = calculate_step_position(
+            current_position=current_position,
+            target_position=target_position,
+            max_position_change=max_position_change,
+        )
+        next_position = step_result["next_position"]
+
+        # ==========================================
+        # 3. 计算本次需要交易的金额
+        # ==========================================
+        trade_result = calculate_trade_value(
+            cash=cash,
+            shares=shares,
+            open_price=open_price,
+            target_position=next_position,
+        )
+        desired_trade_value = trade_result["trade_value"]
+
+        # ==========================================
+        # 4. 初始化交易记录
+        # ==========================================
+        execution_price = None
+        trade_amount = 0.0
+        commission = 0.0
+        action = "HOLD"
+
+        # ==========================================
+        # 5. 执行买入
+        # ==========================================
+        if desired_trade_value > 0.000001:
+            buy_result = calculate_buy_shares(
+                cash=cash,
+                trade_value=desired_trade_value,
+                open_price=open_price,
+                commission_rate=commission_rate,
+                slippage_rate=slippage_rate,
+                lot_size=lot_size,
+            )
+
+            buy_shares = buy_result["shares"]
+            if buy_shares > 0:
+                shares += buy_shares
+                cash -= buy_result["total_cost"]
+
+                execution_price = buy_result["execution_price"]
+                trade_amount = buy_result["trade_amount"]
+                commission = buy_result["commission"]
                 action = "BUY"
 
-            else:
-                # 考虑卖出滑点
-                execution_price = open_price * (1 - slippage_rate)
-                trade_value = shares * execution_price
-                commission = trade_value * commission_rate
-                cash += trade_value - commission
-                shares = 0.0
+        # ==========================================
+        # 6. 执行卖出
+        # ==========================================
+        elif desired_trade_value < -0.000001:
+            sell_result = calculate_sell_shares(
+                shares=shares,
+                open_price=open_price,
+                trade_value=abs(desired_trade_value),
+                commission_rate=commission_rate,
+                slippage_rate=slippage_rate,
+                lot_size=lot_size,
+            )
+            sell_shares = sell_result["shares"]
+            if sell_shares > 0:
+                shares -= sell_shares
+                cash += sell_result["net_amount"]
+
+                execution_price = sell_result["execution_price"]
+                trade_amount = sell_result["trade_amount"]
+                commission = sell_result["commission"]
+
                 action = "SELL"
-        else:
-            execution_price = None
-            trade_value = 0.0
-            commission = 0.0
-            action = "HOLD"
 
         # 收盘估值
         equity = cash + shares * close_price
+        # 收盘时的实际仓位
+        position = shares * close_price / equity if equity > 0 else 0.0
 
         records.append({
             "date": date,
@@ -122,11 +212,26 @@ def run_backtest(
             "ma_short": ma_short,
             "ma_long": ma_long,
             "signal": int(row["signal"]), # signal是在策略中生成的, 所以原先的数据中就有
-            "position": int(shares > 0),
+            "execution_signal": execution_signal,
+
+            # 仓位信息
+            # 注意，position 是收盘后的实际仓位，所以它可能与 next_position 略有差异。这是正常的：成交整手限制、手续费、滑点和收盘价格变化都会造成差异。
+            # "position": int(shares > 0),
+            "position": position,
+            "current_position": current_position,
+            "target_position": target_position,
+            "next_position": next_position,
+
+            # 交易信息
             "action": action,
+            "execution_price": execution_price,
+            "trade_amount": trade_amount,
+            "commission": commission,
+
+            # 账户信息
+            # 账户信息
             "cash": cash,
             "shares": shares,
-            "commission": commission,
             "equity": equity,
         })
 
