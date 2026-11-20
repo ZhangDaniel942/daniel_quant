@@ -24,7 +24,6 @@ def generate_trade_ledger(
     参数：
         result: engine.py 返回的回测结果。
                 交易日期必须是 DataFrame 的 index。
-
     返回：
         每一行代表一笔完整交易。
     """

@@ -27,6 +27,8 @@ Description: 双均线策略（Dual Moving Average Strategy）
 # ============================================================
 
 """
+from idlelib.run import eof
+
 import pandas as pd
 
 def generate_signals(
@@ -53,8 +55,13 @@ def generate_signals(
     )
 
     # 短期均线在长期均线上方时持有
+    # 🔥注意: 这里的ma_short, ma_long都是float64, 跟mysql的decimal不一样, 这里可能会存在精度差异. 所以要减去一个微小差值避免出现微小的精度差异
+    # 比如: date	         open	close	ma_short	       ma_long	signal
+    #       2025/6/4	6.17	6.17	6.098000000000001	6.098	1
+    # 这里ma_short-ma_long = 0, 信号应该为0, 但还因为精度的差异, 就会导致信号变为1.
+    epsilon = 1e-8
     df["signal"] = (
-        df["ma_short"] > df["ma_long"]
+        df["ma_short"] - df["ma_long"] > epsilon
     ).astype(int)
 
     return df
