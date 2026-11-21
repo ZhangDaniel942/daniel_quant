@@ -16,6 +16,9 @@ Description: 收益表现及各种指标
 import numpy as np
 import pandas as pd
 
+from quant.risk.risk_management import calculate_max_drawdown
+
+
 # 使用收盘价和使用净值计算结果是一样的哈
 def calculate_returns(close: pd.Series) -> pd.Series:
     """
@@ -55,6 +58,7 @@ def calculate_cagr(
     # 净值最后一个数据
     final_value = nav.iloc[-1]
 
+    # 总天数减去1, 因为三棵树, 只能有两个区间. net也是一样
     periods = len(nav) - 1
 
     years = periods / periods_per_year
@@ -65,31 +69,11 @@ def calculate_cagr(
     if final_value == 0:
         return -1.0
 
-    cagr = (
-        final_value / initial_value
-    ) ** (1 / years) - 1
+    # 年化收益率就是: (最终的净值-开始的净值)/(总天数/每年的天数)
+    cagr = (final_value / initial_value) ** (1 / years) - 1
 
     return cagr
 
-
-def calculate_max_drawdown(
-    nav: pd.Series,
-) -> tuple[float, pd.Series]:
-    """
-    Calculate maximum drawdown and drawdown series.
-    最大回撤函数
-    """
-
-    # 1. Calculate historical running maximum
-    running_max = nav.cummax()
-
-    # 2. Calculate drawdown from historical peak
-    drawdown = nav / running_max - 1
-
-    # 3. Get maximum drawdown magnitude
-    max_drawdown = -drawdown.min()
-
-    return max_drawdown, drawdown
 
 
 def calculate_volatility(
@@ -179,9 +163,9 @@ def calculate_win_rate(
 
 
 def calculate_performance(
-    nav: pd.Series,
-    returns: pd.Series = None,
-    trade_returns: pd.Series = None,
+    nav: pd.Series,                  # nav是收益率, 用它计算总回报率. 所以需要真实数据前一天的数据作为基准. nav会比returns多一条数据
+    returns: pd.Series = None,       # 这个是每日收益
+    trade_returns: pd.Series = None, # 这个是单笔的收益
     periods_per_year: int = 252,
     risk_free_rate: float = 0.02
 ) -> dict:
@@ -196,11 +180,11 @@ def calculate_performance(
     cagr = calculate_cagr(nav, periods_per_year)
     max_drawdown, drawdown = calculate_max_drawdown(nav)
 
-    total_return = nav.iloc[-1] / nav.iloc[0] - 1
+    total_return = nav.iloc[-1] / nav.iloc[0] - 1 # 注意: nav要多拿一个预热最后一个作为nav0, 这样才能计算出准确的return
 
     # 先把: 净值计算, 年化收益率, 最大回撤
     result = {
-        "total_return": total_return, # 总回报
+        "total_return": total_return, # 总回报率
         "cagr": cagr,                 # 年化收益率
         "max_drawdown": max_drawdown, # 最大回撤
         "final_nav": nav.iloc[-1],    # 最终净值

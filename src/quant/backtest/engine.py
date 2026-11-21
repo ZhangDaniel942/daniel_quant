@@ -7,7 +7,7 @@
 # @Project : daniel_quant
 
 """
-Description: 回测引擎
+Description: 回测引擎, 模拟交易和账户变化
     概念: equity = cash + shares * close
     字段	                中文名称	        含义
     date	            交易日期	        当前交易日
@@ -29,6 +29,7 @@ Description: 回测引擎
 
 import pandas as pd
 
+from quant.backtest.performance import calculate_max_drawdown
 from quant.backtest.position_sizing import calculate_step_position, calculate_trade_value, calculate_buy_shares, calculate_sell_shares
 
 
@@ -40,6 +41,9 @@ def run_backtest(
     max_position: float = 1.0,        # 最大满仓
     max_position_change: float = 0.1, # 每次仓位调整不能大于总资产的10%
     lot_size: int = 100,                   # 每手100份
+    enable_risk_control = True,
+    stop_drawdown: float = 0.10,   # 触发风控的回撤阈值
+    resume_drawdown: float = 0.05, # 解除风控的回撤阈值
 ) -> pd.DataFrame:
     """
     最小版日频回测引擎。
@@ -72,6 +76,9 @@ def run_backtest(
     if lot_size <= 0:
         raise ValueError("交易单位必须大于 0")
 
+    if not 0 < resume_drawdown < stop_drawdown < 1:
+        raise ValueError("回撤参数必须满足：0 < resume_drawdown < stop_drawdown < 1")
+
     data = df.copy().sort_index()
     if data.index.has_duplicates:
         raise ValueError("行情日期不能重复")
@@ -85,6 +92,15 @@ def run_backtest(
 
     cash = float(initial_capital)
     shares = 0.0
+
+    # ==========================================
+    # 风控初始化
+    # ==========================================
+    # 是否处于风控状态
+    risk_stopped = False
+    # 历史最高净值
+    # 初始资金对应的净值为1.0
+    running_max_nav = 1.0
 
     records = []
     for i, (index, row) in enumerate(data.iterrows()):
@@ -124,13 +140,26 @@ def run_backtest(
             if equity_at_open > 0
             else 0.0
         )
+        # ==========================================
+        # 风控判断
+        # ==========================================
+        # 记录今天开盘交易时的风控状态
+        risk_status = risk_stopped
+
+        # 默认情况下，风控后的目标仓位等于策略目标仓位
+        risk_target_position = target_position
+
+        # 如果已经触发风控，并且策略希望继续持有
+        if enable_risk_control and risk_status and execution_signal == 1:
+            # 禁止新增买入，保持当前实际仓位
+            risk_target_position = current_position
 
         # ==========================================
         # 2. 计算今天允许调整到的仓位
         # ==========================================
         step_result = calculate_step_position(
             current_position=current_position,
-            target_position=target_position,
+            target_position=risk_target_position, # 这里需要使用风控的仓位
             max_position_change=max_position_change,
         )
         next_position = step_result["next_position"]
@@ -205,6 +234,29 @@ def run_backtest(
         # 收盘时的实际仓位
         position = shares * close_price / equity if equity > 0 else 0.0
 
+
+        # ==========================================
+        # 收盘后计算回撤
+        # ==========================================
+        nav = equity / initial_capital
+        # 更新历史最高净值
+        running_max_nav = max(running_max_nav, nav)
+        # 计算当天收盘回撤
+        drawdown = nav / running_max_nav - 1
+
+        # ==========================================
+        # 交易完之后再更新下一交易日的风控状态
+        # ==========================================
+        if enable_risk_control:
+            if not risk_stopped and drawdown <= -stop_drawdown:
+                # 达到风控阈值，进入风控状态
+                risk_stopped = True
+            elif risk_stopped and drawdown >= -resume_drawdown:
+                # 回撤恢复到解除阈值，退出风控状态
+                risk_stopped = False
+        # 记录收盘后更新的状态
+        risk_status_next = risk_stopped if enable_risk_control else False
+
         records.append({
             "date": date,
             "open": open_price,
@@ -214,12 +266,18 @@ def run_backtest(
             "signal": int(row["signal"]), # signal是在策略中生成的, 所以原先的数据中就有
             "execution_signal": execution_signal,
 
+            # 风控信息
+            "risk_status": risk_status,
+            "risk_status_next": risk_status_next,
+            "drawdown": drawdown,
+
             # 仓位信息
             # 注意，position 是收盘后的实际仓位，所以它可能与 next_position 略有差异。这是正常的：成交整手限制、手续费、滑点和收盘价格变化都会造成差异。
             # "position": int(shares > 0),
             "position": position,
             "current_position": current_position,
             "target_position": target_position,
+            "risk_target_position": risk_target_position,
             "next_position": next_position,
 
             # 交易信息
@@ -245,5 +303,9 @@ def run_backtest(
     result["nav"] = result["equity"] / initial_capital
     # 这里使用收盘价计算收益比
     result["return"] = result["nav"].pct_change().fillna(0)
+
+    # # 同时直接计算回撤
+    # # 上面已经计算过了
+    # result["drawdown"] = calculate_max_drawdown(result["nav"])[1]
 
     return result

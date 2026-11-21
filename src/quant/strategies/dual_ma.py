@@ -27,8 +27,6 @@ Description: 双均线策略（Dual Moving Average Strategy）
 # ============================================================
 
 """
-from idlelib.run import eof
-
 import pandas as pd
 
 def generate_signals(
@@ -44,15 +42,16 @@ def generate_signals(
     :param long_window:  长期窗口长度
     :return:
     """
+    if short_window <= 0 or long_window <= 0:
+        raise ValueError("均线周期必须大于 0")
+
+    if short_window >= long_window:
+        raise ValueError("短均线周期必须小于长均线周期")
+
     df = df.copy()
 
-    df["ma_short"] = (
-        df["close"].rolling(short_window).mean()
-    )
-
-    df["ma_long"] = (
-        df["close"].rolling(long_window).mean()
-    )
+    df["ma_short"] = df["close"].rolling(short_window).mean()
+    df["ma_long"] = df["close"].rolling(long_window).mean()
 
     # 短期均线在长期均线上方时持有
     # 🔥注意: 这里的ma_short, ma_long都是float64, 跟mysql的decimal不一样, 这里可能会存在精度差异. 所以要减去一个微小差值避免出现微小的精度差异
@@ -60,8 +59,6 @@ def generate_signals(
     #       2025/6/4	6.17	6.17	6.098000000000001	6.098	1
     # 这里ma_short-ma_long = 0, 信号应该为0, 但还因为精度的差异, 就会导致信号变为1.
     epsilon = 1e-8
-    df["signal"] = (
-        df["ma_short"] - df["ma_long"] > epsilon
-    ).astype(int)
+    df["signal"] = (df["ma_short"] - df["ma_long"] > epsilon).astype(int)
 
     return df
